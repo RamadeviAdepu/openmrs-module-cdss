@@ -125,7 +125,6 @@ public class ConditionsRequestBuilder implements RequestBuilder<Bundle> {
                 null, null, null, null,
                 null, null, null, null);
 
-        log.info("reached here {}", conditionSearchParams);
         IBundleProvider iBundleProvider = fhirConditionService.searchConditions(conditionSearchParams);
 
         for (IBaseResource conditionBaseResource : iBundleProvider.getAllResources()) {
