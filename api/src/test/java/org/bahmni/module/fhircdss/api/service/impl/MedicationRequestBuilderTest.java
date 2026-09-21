@@ -7,6 +7,7 @@ import org.hl7.fhir.r4.model.Coding;
 import org.hl7.fhir.r4.model.Dosage;
 import org.hl7.fhir.r4.model.MedicationRequest;
 import org.hl7.fhir.r4.model.Quantity;
+import org.hl7.fhir.r4.model.Reference;
 import org.hl7.fhir.r4.model.ResourceType;
 import org.hl7.fhir.r4.model.Timing;
 import org.junit.Rule;
@@ -35,6 +36,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -308,9 +310,149 @@ public class MedicationRequestBuilderTest {
         return ((MedicationRequest) bundleEntryComponent.getResource()).getDosageInstruction().get(0).getTiming().getCode().getText();
     }
 
+    @Test
+    public void shouldResolveUnsupportedEnvironmentFrequencies_whenDraftMedicationsWithFrequencyTextInputPassed() throws Exception {
+        Bundle mockRequestBundle = getMedicationRequestBundle(
+                "Every 30 minutes",
+                "Four times a day / Every 6 hours",
+                "In Morning",
+                "In Afternoon",
+                "Nocte (At Night)",
+                "STAT (Immediately)",
+                "Three times a day / Every 8 hours",
+                "Three times a week",
+                "Twice a day / Every 12 hours");
+
+        when(orderService.getActiveOrders(any(), any(), any(), any())).thenReturn(Collections.emptyList());
+        Bundle medicationBundle = medicationRequestBuilder.build(mockRequestBundle);
+
+        List<Bundle.BundleEntryComponent> resultMedicationEntries = getMedicationEntries(medicationBundle);
+        assertEquals(9, resultMedicationEntries.size());
+
+        assertRepeat(resultMedicationEntries.get(0), 1, 30, "min", null);
+        assertRepeat(resultMedicationEntries.get(1), 4, 1, "d", null);
+        assertRepeat(resultMedicationEntries.get(2), 1, 1, "d", Timing.EventTiming.MORN);
+        assertRepeat(resultMedicationEntries.get(3), 1, 1, "d", Timing.EventTiming.AFT);
+        assertRepeat(resultMedicationEntries.get(4), 1, 1, "d", Timing.EventTiming.NIGHT);
+        assertRepeat(resultMedicationEntries.get(5), 1, 1, "d", null);
+        assertRepeat(resultMedicationEntries.get(6), 3, 1, "d", null);
+        assertRepeat(resultMedicationEntries.get(7), 3, 1, "wk", null);
+        assertRepeat(resultMedicationEntries.get(8), 2, 1, "d", null);
+    }
+
+    @Test
+    public void shouldResolveFuturePatternFrequencies_whenDraftMedicationsWithFrequencyTextInputPassed() throws Exception {
+        Bundle mockRequestBundle = getMedicationRequestBundle(
+                "Every 30 minutes",
+                "Every 90 minutes",
+                "Every 3 days",
+                "Seven times a day",
+                "Three times a week");
+
+        when(orderService.getActiveOrders(any(), any(), any(), any())).thenReturn(Collections.emptyList());
+        Bundle medicationBundle = medicationRequestBuilder.build(mockRequestBundle);
+
+        List<Bundle.BundleEntryComponent> resultMedicationEntries = getMedicationEntries(medicationBundle);
+        assertEquals(5, resultMedicationEntries.size());
+
+        assertRepeat(resultMedicationEntries.get(0), 1, 30, "min", null);
+        assertRepeat(resultMedicationEntries.get(1), 1, 90, "min", null);
+        assertRepeat(resultMedicationEntries.get(2), 1, 3, "d", null);
+        assertRepeat(resultMedicationEntries.get(3), 7, 1, "d", null);
+        assertRepeat(resultMedicationEntries.get(4), 3, 1, "wk", null);
+    }
+
+    @Test
+    public void shouldHandleNamingVariations_whenDraftMedicationsWithFrequencyTextInputPassed() throws Exception {
+        Bundle mockRequestBundle = getMedicationRequestBundle(
+                "  SEVEN TIMES   A DAY  ",
+                " stat (Immediately) ",
+                "every    30   minutes");
+
+        when(orderService.getActiveOrders(any(), any(), any(), any())).thenReturn(Collections.emptyList());
+        Bundle medicationBundle = medicationRequestBuilder.build(mockRequestBundle);
+
+        List<Bundle.BundleEntryComponent> resultMedicationEntries = getMedicationEntries(medicationBundle);
+        assertEquals(3, resultMedicationEntries.size());
+
+        assertRepeat(resultMedicationEntries.get(0), 7, 1, "d", null);
+        assertRepeat(resultMedicationEntries.get(1), 1, 1, "d", null);
+        assertRepeat(resultMedicationEntries.get(2), 1, 30, "min", null);
+    }
+
+    @Test
+    public void shouldSkipFrequencyNormalization_whenFrequencyIsUnsupported() throws Exception {
+        Bundle mockRequestBundle = getMedicationRequestBundle("Some Future Frequency");
+
+        when(orderService.getActiveOrders(any(), any(), any(), any())).thenReturn(Collections.emptyList());
+        Bundle medicationBundle = medicationRequestBuilder.build(mockRequestBundle);
+
+        List<Bundle.BundleEntryComponent> resultMedicationEntries = getMedicationEntries(medicationBundle);
+        assertEquals(1, resultMedicationEntries.size());
+
+        Timing.TimingRepeatComponent repeat = getFrequencyTimingFromBundleEntry(resultMedicationEntries.get(0)).getRepeat();
+        assertEquals(0, repeat.getFrequency());
+        assertEquals(false, repeat.hasPeriod());
+        assertEquals(false, repeat.hasPeriodUnit());
+    }
+
+    @Test
+    public void shouldNotFail_whenPatientHasActiveMedicationWithUnsupportedFrequency_andAnotherValidMedication() throws Exception {
+        Bundle mockRequestBundle = getMockRequestBundle("request_bundle.json");
+
+        MedicationRequest unsupportedFrequencyMedication = new MedicationRequest();
+        addDummyDosageInstruction(unsupportedFrequencyMedication, "ml", 2.0, "Some Future Frequency");
+        MedicationRequest validMedication = new MedicationRequest();
+        addDummyDosageInstruction(validMedication, "ml", 2.0, "Once a day");
+
+        List<Order> activeOrders = Arrays.asList(getDrugOrder("order-unsupported-frequency"), getDrugOrder("order-valid-frequency"));
+        when(orderService.getActiveOrders(any(), any(), any(), any())).thenReturn(activeOrders);
+        when(fhirMedicationRequestService.get("order-unsupported-frequency")).thenReturn(unsupportedFrequencyMedication);
+        when(fhirMedicationRequestService.get("order-valid-frequency")).thenReturn(validMedication);
+
+        Bundle medicationBundle = medicationRequestBuilder.build(mockRequestBundle);
+
+        List<Bundle.BundleEntryComponent> resultMedicationEntries = getMedicationEntries(medicationBundle);
+        assertEquals(3, resultMedicationEntries.size());
+        assertRepeat(resultMedicationEntries.get(1), 1, 1, "d", null);
+    }
+
+    private static void assertRepeat(Bundle.BundleEntryComponent bundleEntryComponent, int frequency, int period, String periodUnit, Timing.EventTiming when) {
+        Timing.TimingRepeatComponent repeat = getFrequencyTimingFromBundleEntry(bundleEntryComponent).getRepeat();
+        assertEquals(frequency, repeat.getFrequency());
+        assertEquals(0, repeat.getPeriod().compareTo(new BigDecimal(period)));
+        assertEquals(periodUnit, repeat.getPeriodUnit().toCode());
+        if (when == null) {
+            assertEquals(false, repeat.hasWhen());
+        } else {
+            assertEquals(true, repeat.hasWhen());
+            assertEquals(when, repeat.getWhen().get(0).getValue());
+        }
+    }
+
+    private static List<Bundle.BundleEntryComponent> getMedicationEntries(Bundle bundle) {
+        return bundle.getEntry().stream().filter(entry -> ResourceType.MedicationRequest.equals(entry.getResource().getResourceType())).collect(Collectors.toList());
+    }
+
+    private Bundle getMedicationRequestBundle(String... frequencyTexts) {
+        Bundle bundle = new Bundle();
+        bundle.setType(Bundle.BundleType.COLLECTION);
+        for (String frequencyText : frequencyTexts) {
+            MedicationRequest medicationRequest = new MedicationRequest();
+            medicationRequest.setSubject(new Reference("Patient/dc9444c6-ad55-4200-b6e9-407e025eb948"));
+            addDummyDosageInstruction(medicationRequest, "ml", 2.0, frequencyText);
+            bundle.addEntry(new Bundle.BundleEntryComponent().setResource(medicationRequest));
+        }
+        return bundle;
+    }
+
     private List<Order> getDrugOrders() {
+        return Collections.singletonList(getDrugOrder("order-uuid"));
+    }
+
+    private Order getDrugOrder(String uuid) {
         DrugOrder drugOrder = new DrugOrder();
-        drugOrder.setUuid("order-uuid");
+        drugOrder.setUuid(uuid);
         Drug drug = new Drug();
         DrugReferenceMap referenceMap = new DrugReferenceMap();
         ConceptReferenceTerm conceptReferenceTerm = new ConceptReferenceTerm();
@@ -321,7 +463,7 @@ public class MedicationRequestBuilderTest {
         drugOrder.setDose(1.0);
         drugOrder.setDoseUnits(getMockConcept("ml", "ml", false));
         drugOrder.setRoute(getMockConcept("Oral", "PO", false));
-        return Collections.singletonList(drugOrder);
+        return drugOrder;
     }
 
     private Bundle getMockRequestBundle(String fileName) throws Exception {
