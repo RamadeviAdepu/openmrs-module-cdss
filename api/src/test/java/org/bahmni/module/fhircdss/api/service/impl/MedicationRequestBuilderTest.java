@@ -90,6 +90,27 @@ public class MedicationRequestBuilderTest {
     }
 
     @Test
+    public void shouldExcludeNonCodedActiveMedications_whenPatientHasNonCodedActiveOrder_andCodedActiveOrder() throws Exception {
+        Bundle mockRequestBundle = getMockRequestBundle("request_bundle.json");
+        MedicationRequest medicationRequest = new MedicationRequest();
+        addDummyDosageInstruction(medicationRequest, "ml", 2.0, "Once a day");
+
+        DrugOrder nonCodedOrder = (DrugOrder) getDrugOrder("non-coded-order-uuid");
+        nonCodedOrder.setDrug(null);
+        List<Order> mockedOrders = Arrays.asList(getDrugOrder("order-uuid"), nonCodedOrder);
+
+        when(orderService.getActiveOrders(any(), any(), any(), any())).thenReturn(mockedOrders);
+        when(fhirMedicationRequestService.get(anyString())).thenReturn(medicationRequest);
+
+        Bundle medicationBundle = medicationRequestBuilder.build(mockRequestBundle);
+
+        List<Bundle.BundleEntryComponent> resultMedicationEntries = medicationBundle.getEntry().stream().filter(entry -> ResourceType.MedicationRequest.equals(entry.getResource().getResourceType())).collect(Collectors.toList());
+
+        // 1 coded active order + 1 draft medication from the request bundle; the non-coded active order is excluded, not causing an NPE
+        assertEquals(2, resultMedicationEntries.size());
+    }
+
+    @Test
     public void shouldExcludeInactiveMedications_whenPatientHasOneInactiveMedication_oneDraftMedication() throws Exception {
         Bundle mockRequestBundle = getMockRequestBundle("request_bundle.json");
 

@@ -69,6 +69,10 @@ public class MedicationRequestBuilder implements RequestBuilder<Bundle> {
         String patientUuid = CdssUtils.getPatientUuidFromRequest(inputBundle);
         List<Order> activeOrders = getActiveOrders(patientUuid);
         for (Order order : activeOrders) {
+            if (((DrugOrder) order).getDrug() == null) {
+                logger.warn("Skipping non-coded drug order '" + order.getUuid() + "' from CDSS bundle - no coded drug to evaluate.");
+                continue;
+            }
             MedicationRequest medicationRequest = fhirMedicationRequestService.get(order.getUuid());
             CodeableConcept codeableConcept = getCodeableConceptForMedicationRequest(order);
             medicationRequest.setMedication(codeableConcept);
