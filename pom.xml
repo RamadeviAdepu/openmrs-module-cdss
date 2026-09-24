@@ -26,9 +26,9 @@
         </developer>
     </developers>
     <properties>
-        <openmrsPlatformVersion>2.6.15</openmrsPlatformVersion>
+        <openmrsPlatformVersion>2.5.14</openmrsPlatformVersion>
         <openmrsFhir2Version>2.5.0</openmrsFhir2Version>
-        <webServicesVersion>2.49.0</webServicesVersion>
+        <webServicesVersion>2.44.0</webServicesVersion>
         <powerMockVersion>2.0.9</powerMockVersion>
         <mockitoVersion>3.5.11</mockitoVersion>
         <junitVersion>4.13.2</junitVersion>

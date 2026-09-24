@@ -69,6 +69,10 @@ public class MedicationRequestBuilder implements RequestBuilder<Bundle> {
         String patientUuid = CdssUtils.getPatientUuidFromRequest(inputBundle);
         List<Order> activeOrders = getActiveOrders(patientUuid);
         for (Order order : activeOrders) {
+            if (((DrugOrder) order).getDrug() == null) {
+                logger.warn("Skipping non-coded drug order '" + order.getUuid() + "' from CDSS bundle - no coded drug to evaluate.");
+                continue;
+            }
             MedicationRequest medicationRequest = fhirMedicationRequestService.get(order.getUuid());
             CodeableConcept codeableConcept = getCodeableConceptForMedicationRequest(order);
             medicationRequest.setMedication(codeableConcept);
@@ -126,21 +130,29 @@ public class MedicationRequestBuilder implements RequestBuilder<Bundle> {
         Dosage dosage = medicationRequest.getDosageInstruction().get(0);
         resolveDoseUnit(dosage);
         resolveDoseRoute(dosage);
-        Frequency frequency = getFrequencyFromDosage(dosage);
+        String frequencyText = getFrequencyTextFromDosage(dosage);
+        Frequency.FrequencyValue frequency = Frequency.resolveFrequency(frequencyText);
+        if (frequency == null) {
+            logger.warn("Skipping CDSS dosage frequency normalization for unsupported frequency: '" + frequencyText + "'");
+            return;
+        }
         resolveFhirDosageFrequency(dosage, frequency);
     }
 
-    private Frequency getFrequencyFromDosage(Dosage dosage) {
-        CodeableConcept codeableConcept = dosage.getTiming().getCode();
-        String frequencyStr = codeableConcept.getText();
-        Frequency frequencyObject = Frequency.valueOfFrequency(frequencyStr);
-        return frequencyObject;
+    private String getFrequencyTextFromDosage(Dosage dosage) {
+        if (dosage.getTiming() == null || dosage.getTiming().getCode() == null) {
+            return null;
+        }
+        return dosage.getTiming().getCode().getText();
     }
 
-    private void resolveFhirDosageFrequency(Dosage dosage, Frequency frequency) {
+    private void resolveFhirDosageFrequency(Dosage dosage, Frequency.FrequencyValue frequency) {
         dosage.getTiming().getRepeat().setFrequency(frequency.getFrequencyCount());
         dosage.getTiming().getRepeat().setPeriod(frequency.getPeriodCount());
         dosage.getTiming().getRepeat().setPeriodUnit(Timing.UnitsOfTime.fromCode(frequency.getPeriodUnit()));
+        if (frequency.getWhen() != null) {
+            dosage.getTiming().getRepeat().addWhen(frequency.getWhen());
+        }
     }
 
     private void resolveDoseUnit(Dosage dosage) {
